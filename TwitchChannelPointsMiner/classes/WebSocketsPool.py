@@ -1,8 +1,8 @@
 import json
 import logging
 import random
-import threading
 import time
+from threading import Thread, Timer
 
 from dateutil import parser
 
@@ -67,7 +67,7 @@ class WebSocketsPool:
         )
 
     def __start(self, index):
-        thread_ws = threading.Thread(target=lambda: self.ws[index].run_forever())
+        thread_ws = Thread(target=lambda: self.ws[index].run_forever())
         thread_ws.daemon = True
         thread_ws.name = f"WebSocket #{self.ws[index].index}"
         thread_ws.start()
@@ -99,7 +99,7 @@ class WebSocketsPool:
                         )
                         WebSocketsPool.handle_reconnection(ws)
 
-        thread_ws = threading.Thread(target=run)
+        thread_ws = Thread(target=run)
         thread_ws.daemon = True
         thread_ws.start()
 
@@ -176,11 +176,18 @@ class WebSocketsPool:
             if streamer_index != -1:
                 try:
                     if message.topic == "community-points-user-v1":
+                        if message.type in ["points-earned", "points-spent"]:
+                            balance = message.data["balance"]["balance"]
+                            ws.streamers[streamer_index].channel_points = balance
+                            ws.streamers[streamer_index].persistent_series(
+                                event_type=message.data["point_gain"]["reason_code"]
+                                if message.type == "points-earned"
+                                else "Spent"
+                            )
+
                         if message.type == "points-earned":
                             earned = message.data["point_gain"]["total_points"]
                             reason_code = message.data["point_gain"]["reason_code"]
-                            balance = message.data["balance"]["balance"]
-                            ws.streamers[streamer_index].channel_points = balance
                             logger.info(
                                 f"+{earned} → {ws.streamers[streamer_index]} - Reason: {reason_code}.",
                                 extra={
@@ -192,6 +199,9 @@ class WebSocketsPool:
                             )
                             ws.streamers[streamer_index].update_history(
                                 reason_code, earned
+                            )
+                            ws.streamers[streamer_index].persistent_annotations(
+                                reason_code, f"+{earned} - {reason_code}"
                             )
                         elif message.type == "claim-available":
                             ws.twitch.claim_bonus(
@@ -261,7 +271,7 @@ class WebSocketsPool:
                                             current_tmsp
                                         )
 
-                                        place_bet_thread = threading.Timer(
+                                        place_bet_thread = Timer(
                                             start_after,
                                             ws.twitch.make_predictions,
                                             (ws.events_predictions[event_id],),
@@ -333,8 +343,18 @@ class WebSocketsPool:
                                         -points["won"],
                                         counter=-1,
                                     )
+
+                                if event_prediction.result["type"] != "LOSE":
+                                    ws.streamers[streamer_index].persistent_annotations(
+                                        event_prediction.result["type"],
+                                        f"{ws.events_predictions[event_id].title}",
+                                    )
                             elif message.type == "prediction-made":
                                 event_prediction.bet_confirmed = True
+                                ws.streamers[streamer_index].persistent_annotations(
+                                    "PREDICTION_MADE",
+                                    f"Decision: {event_prediction.bet.decision['choice']} - {event_prediction.title}",
+                                )
                 except Exception:
                     logger.error(
                         f"Exception raised for topic: {message.topic} and message: {message}",
