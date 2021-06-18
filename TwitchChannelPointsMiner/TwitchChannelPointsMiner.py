@@ -165,50 +165,50 @@ class TwitchChannelPointsMiner:
             streamers_name = list(
                 OrderedDict.fromkeys(streamers_name + followers_array)
             )
+            streamers_name = [name for name in streamers_name if name not in blacklist]
 
             logger.info(
                 f"Loading data for {len(streamers_name)} streamers. Please wait...",
                 extra={"emoji": ":nerd_face:"},
             )
             for username in streamers_name:
-                time.sleep(random.uniform(0.3, 0.7))
-                try:
-                    streamer = (
-                        streamers_dict[username]
-                        if isinstance(streamers_dict[username], Streamer) is True
-                        else Streamer(username)
-                    )
-                    streamer.channel_id = self.twitch.get_channel_id(username)
-                    streamer.settings = set_default_settings(
-                        streamer.settings, Settings.streamer_settings
-                    )
-                    streamer.settings.bet = set_default_settings(
-                        streamer.settings.bet, Settings.streamer_settings.bet
-                    )
-                    if streamer.settings.join_chat is True:
-                        streamer.irc_chat = ThreadChat(
-                            self.username,
-                            self.twitch.twitch_login.get_auth_token(),
-                            streamer.username,
+                if username in streamers_name:
+                    time.sleep(random.uniform(0.3, 0.7))
+                    try:
+                        streamer = (
+                            streamers_dict[username]
+                            if isinstance(streamers_dict[username], Streamer) is True
+                            else Streamer(username)
                         )
-                    self.streamers.append(streamer)
-                except StreamerDoesNotExistException:
-                    logger.info(
-                        f"Streamer {username} does not exist",
-                        extra={"emoji": ":cry:"},
-                    )
+                        streamer.channel_id = self.twitch.get_channel_id(username)
+                        streamer.settings = set_default_settings(
+                            streamer.settings, Settings.streamer_settings
+                        )
+                        streamer.settings.bet = set_default_settings(
+                            streamer.settings.bet, Settings.streamer_settings.bet
+                        )
+                        if streamer.settings.join_chat is True:
+                            streamer.irc_chat = ThreadChat(
+                                self.username,
+                                self.twitch.twitch_login.get_auth_token(),
+                                streamer.username,
+                            )
+                        self.streamers.append(streamer)
+                    except StreamerDoesNotExistException:
+                        logger.info(
+                            f"Streamer {username} does not exist",
+                            extra={"emoji": ":cry:"},
+                        )
 
             # Populate the streamers with default values.
             # 1. Load channel points and auto-claim bonus
             # 2. Check if streamers are online
-            # 3. Check if the user is a Streamer. In thi case you can't do prediction
+            # 3. DEACTIVATED: Check if the user is a moderator. (was used before the 5th of April 2021 to deactivate predictions)
             for streamer in self.streamers:
                 time.sleep(random.uniform(0.3, 0.7))
                 self.twitch.load_channel_points_context(streamer)
                 self.twitch.check_streamer_online(streamer)
-                self.twitch.viewer_is_mod(streamer)
-                if streamer.viewer_is_mod is True:
-                    streamer.settings.make_predictions = False
+                # self.twitch.viewer_is_mod(streamer)
 
             self.original_streamers = [
                 streamer.channel_points for streamer in self.streamers
@@ -276,6 +276,7 @@ class TwitchChannelPointsMiner:
                         PubsubTopic("predictions-channel-v1", streamer=streamer)
                     )
 
+            refresh_context = time.time()
             while self.running:
                 time.sleep(random.uniform(20, 60))
                 # Do an external control for WebSocket. Check if the thread is running
@@ -290,6 +291,14 @@ class TwitchChannelPointsMiner:
                             f"#{index} - The last PING was sent more than 10 minutes ago. Reconnecting to the WebSocket..."
                         )
                         WebSocketsPool.handle_reconnection(self.ws_pool.ws[index])
+
+                if ((time.time() - refresh_context) // 60) >= 30:
+                    refresh_context = time.time()
+                    for index in range(0, len(self.streamers)):
+                        if self.streamers[index].is_online:
+                            self.twitch.load_channel_points_context(
+                                self.streamers[index]
+                            )
 
     def end(self, signum, frame):
         logger.info("CTRL+C Detected! Please wait just a moment!")
